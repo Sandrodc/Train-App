@@ -69,6 +69,12 @@ BOARD_SCHEMA = pa.schema([
     ("cancelled", pa.bool_()),             # code 32
     ("terminates_early", pa.bool_()),      # code 34
     ("cause", pa.string()),                # WijzigingOorzaakKort, if any
+    ("cause_code", pa.string()),           # WijzigingOorzaakCode, if any (not seen on the feed so far)
+    ("shown_delay_s", pa.int32()),         # GedempteVertrek/AankomstVertraging: the delay NS displays
+    ("material_numbers", pa.list_(pa.string())),  # MaterieelNummer per unit (DVS only)
+    ("material_types", pa.list_(pa.string())),    # MaterieelSoort-MaterieelAanduiding per unit, e.g. SLT-6
+    ("train_length_m", pa.float32()),      # sum of MaterieelLengte (feed unit is cm)
+    ("n_units", pa.int16()),               # number of MaterieelDeel elements
 ])
 RAW_SCHEMA = pa.schema([
     ("received_at", pa.timestamp("ms", tz="UTC")),
@@ -121,12 +127,25 @@ def parse_board(kind: str, xml: bytes, received_at: datetime) -> dict:
     time_tag, delay_tag, plat_tag = (
         ("VertrekTijd", "ExacteVertrekVertraging", "TreinVertrekSpoor") if kind == "dvs"
         else ("AankomstTijd", "ExacteAankomstVertraging", "TreinAankomstSpoor"))
-    codes, cause = [], None
-    for w in train.iter("{*}Wijziging"):
+    # Element.iter() ignores the {*} wildcard; findall() supports it. DAS messages carry
+    # the change as WijzigingHerkomst (a change on the way in) instead of Wijziging.
+    changes = train.findall(".//{*}Wijziging") + train.findall(".//{*}WijzigingHerkomst")
+    codes, cause, cause_code = [], None, None
+    for w in changes:
         c = _text(w, "{*}WijzigingType")
         if c:
             codes.append(int(c))
         cause = cause or _text(w, "{*}WijzigingOorzaakKort")
+        cause_code = cause_code or _text(w, "{*}WijzigingOorzaakCode")
+    units = train.findall(".//{*}MaterieelDeelDVS")
+    lengths = [_text(u, "{*}MaterieelLengte") for u in units]
+    lengths = [int(x) for x in lengths if x]
+    material_types = []
+    for u in units:
+        kind_, size = _text(u, "{*}MaterieelSoort"), _text(u, "{*}MaterieelAanduiding")
+        if kind_:
+            material_types.append(f"{kind_}-{size}" if size else kind_)
+    shown_tag = "GedempteVertrekVertraging" if kind == "dvs" else "GedempteAankomstVertraging"
     status = _text(train, "{*}TreinStatus")
     rit_date = _text(state, "{*}RitDatum")
     return {
@@ -148,6 +167,12 @@ def parse_board(kind: str, xml: bytes, received_at: datetime) -> dict:
         "cancelled": 32 in codes,
         "terminates_early": 34 in codes,
         "cause": cause,
+        "cause_code": cause_code,
+        "shown_delay_s": _iso_duration_s(_text(train, f"{{*}}{shown_tag}")),
+        "material_numbers": [m for m in (_text(u, "{*}MaterieelNummer") for u in units) if m],
+        "material_types": material_types,
+        "train_length_m": sum(lengths) / 100 if lengths else None,
+        "n_units": len(units) if units else None,
     }
 
 
