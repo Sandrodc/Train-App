@@ -26,11 +26,15 @@ $SSH 'cd /opt/train-app
   .venv/bin/pip install -q -r requirements-logger.txt
   chown -R train:train /opt/train-app'
 
-echo "==> 4/5 Installing and (re)starting the logger service"
+echo "==> 4/5 Installing and (re)starting the logger service and its health-check timer"
 $SSH 'cp /opt/train-app/deploy/train-logger.service /etc/systemd/system/
   systemctl daemon-reload
   systemctl enable --quiet train-logger
-  systemctl restart train-logger'
+  systemctl restart train-logger
+  cp /opt/train-app/deploy/train-health.service /opt/train-app/deploy/train-health.timer /etc/systemd/system/
+  [ -f /etc/default/train-health ] || echo "# HEALTH_NOTIFY_CMD=curl -s -d @- https://ntfy.sh/<private-topic>" > /etc/default/train-health
+  systemctl daemon-reload
+  systemctl enable --quiet --now train-health.timer'
 
 echo "==> 5/5 Checking it runs (waiting 20 s)"
 sleep 20

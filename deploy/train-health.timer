@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the NS live logger health check every 5 minutes (alert within 20 min of a stop)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

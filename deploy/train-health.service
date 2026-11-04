@@ -1,0 +1,15 @@
+# Runs the logger health check once (triggered by train-health.timer every 5 min).
+# Alert channel: set HEALTH_NOTIFY_CMD in /etc/default/train-health, e.g.
+#   HEALTH_NOTIFY_CMD=curl -s -d @- https://ntfy.sh/<your-private-topic>
+[Unit]
+Description=Health check for the NS live logger
+
+[Service]
+Type=oneshot
+User=train
+WorkingDirectory=/opt/train-app
+EnvironmentFile=-/etc/default/train-health
+ExecStart=/opt/train-app/.venv/bin/python -m pipeline.health
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
