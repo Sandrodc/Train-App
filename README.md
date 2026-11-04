@@ -9,7 +9,7 @@ Working title: **Flighty for Dutch public transport** — a commute confidence l
 
 ## Data pipeline
 
-Python 3.9+, everything runs locally on DuckDB + Parquet. `data/` is git-ignored (~4.5 GB once built).
+Python 3.9+, everything runs locally on DuckDB + Parquet. `data/` is git-ignored (~5 GB once built).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
