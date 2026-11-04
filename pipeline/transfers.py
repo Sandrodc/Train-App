@@ -9,6 +9,16 @@ A connection is missed when both trains ran and
     feeder actual arrival + walk > onward actual departure.
 Held connections show up as onward departure delay, so they count as made.
 
+A journey is broken when the connection is missed or either leg is cancelled, which is
+what the commuter feels. Reported per planned connection (all of them):
+  pct_missed         missed, among connections where both legs ran
+  pct_cancelled_leg  feeder or onward cancelled
+  pct_broken         missed or a cancelled leg
+  extra_min_*        when broken: minutes from the planned onward departure to the actual
+                     departure of the next onward train that ran and that you could reach
+                     (if the feeder was cancelled: via the next feeder that ran). Floored at
+                     0: a later but faster feeder can reach an earlier onward train.
+
 Writes data/reports/transfers_by_buffer.csv and transfers_by_slot.csv.
 
 Usage:
@@ -71,13 +81,39 @@ pairs AS (
     ASOF JOIN onward o
       ON o.transfer = f.transfer AND o.service_date = f.service_date
      AND o.o_dep >= f.f_arr + to_minutes(f.walk)
+),
+judged AS (
+    SELECT *,
+        CASE WHEN f_cancelled OR o_cancelled THEN NULL
+             ELSE f_delay + walk > buffer + o_delay END AS missed,
+        isodow(service_date) <= 5 AS weekday
+    FROM pairs
+    WHERE buffer <= 30            -- ignore late-evening gaps with no sensible connection
+),
+ready AS (      -- when you are on the platform at `via`, ready to board
+    SELECT j.transfer, j.service_date, j.f_dep,
+           CASE WHEN NOT j.f_cancelled THEN j.f_arr + to_minutes(j.f_delay + j.walk)
+                ELSE min(f2.f_arr + to_minutes(f2.f_delay + j.walk)) END AS ready_at
+    FROM judged j
+    LEFT JOIN feeder f2 ON j.f_cancelled AND f2.transfer = j.transfer
+         AND f2.service_date = j.service_date AND f2.f_dep >= j.f_dep AND NOT f2.f_cancelled
+    WHERE coalesce(j.missed, true)
+    GROUP BY j.transfer, j.service_date, j.f_dep, j.f_cancelled, j.f_arr, j.f_delay, j.walk
+),
+fallback AS (
+    SELECT r.transfer, r.service_date, r.f_dep,
+           min(o.o_dep + to_minutes(o.o_delay)) AS next_onward_actual
+    FROM ready r
+    JOIN onward o ON o.transfer = r.transfer AND o.service_date = r.service_date
+     AND NOT o.o_cancelled AND o.o_dep + to_minutes(o.o_delay) >= r.ready_at
+    GROUP BY ALL
 )
-SELECT *,
-    CASE WHEN f_cancelled OR o_cancelled THEN NULL
-         ELSE f_delay + walk > buffer + o_delay END AS missed,
-    isodow(service_date) <= 5 AS weekday
-FROM pairs
-WHERE buffer <= 30            -- ignore late-evening gaps with no sensible connection
+SELECT j.*,
+    coalesce(j.missed, false) OR j.f_cancelled OR j.o_cancelled AS broken,
+    CASE WHEN coalesce(j.missed, false) OR j.f_cancelled OR j.o_cancelled
+         THEN greatest(0, date_diff('minute', j.o_dep, fb.next_onward_actual)) END AS extra_min
+FROM judged j
+LEFT JOIN fallback fb USING (transfer, service_date, f_dep)
 """
 
 
@@ -93,19 +129,25 @@ def main(argv=None):
     by_buffer = con.sql("""
         SELECT transfer, buffer AS planned_buffer_min, count(*) AS n,
                round(avg(missed::int) * 100, 1)        AS pct_missed,
-               round(avg((f_cancelled OR o_cancelled)::int) * 100, 1) AS pct_cancelled_leg
+               round(avg((f_cancelled OR o_cancelled)::int) * 100, 1) AS pct_cancelled_leg,
+               round(avg(broken::int) * 100, 1) AS pct_broken,
+               median(extra_min) AS extra_min_median, round(avg(extra_min), 1) AS extra_min_mean
         FROM pairs WHERE weekday GROUP BY ALL HAVING count(*) >= 30 ORDER BY transfer, planned_buffer_min
     """).df()
     by_slot = con.sql("""
         SELECT transfer, strftime(f_dep, '%H:%M') AS feeder_dep, strftime(o_dep, '%H:%M') AS onward_dep,
                mode(buffer) AS buffer, count(*) AS n,
                round(avg(missed::int) * 100, 1) AS pct_missed,
-               round(avg((f_cancelled OR o_cancelled)::int) * 100, 1) AS pct_cancelled_leg
+               round(avg((f_cancelled OR o_cancelled)::int) * 100, 1) AS pct_cancelled_leg,
+               round(avg(broken::int) * 100, 1) AS pct_broken,
+               median(extra_min) AS extra_min_median
         FROM pairs WHERE weekday GROUP BY ALL HAVING count(*) >= 20 ORDER BY transfer, feeder_dep
     """).df()
     overall = con.sql("""
         SELECT transfer, count(*) AS n, round(avg(missed::int) * 100, 1) AS pct_missed,
                round(avg((f_cancelled OR o_cancelled)::int) * 100, 1) AS pct_cancelled_leg,
+               round(avg(broken::int) * 100, 1) AS pct_broken,
+               median(extra_min) AS extra_min_median,
                median(buffer) AS median_buffer
         FROM pairs WHERE weekday GROUP BY transfer ORDER BY transfer
     """).df()
