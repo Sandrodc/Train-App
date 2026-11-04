@@ -95,3 +95,9 @@ def test_health_alerts_once_reminds_and_recovers():
     assert "recovered" in msg
     msg, s = decide([], s, t0 + timedelta(hours=8))
     assert msg is None
+
+
+def test_drop_covid_keeps_edges_out():
+    days = pd.to_datetime(["2020-03-15", "2020-03-16", "2022-03-31", "2022-04-01"])
+    kept = scoreboard.drop_covid(pd.DataFrame({"service_date": days}))
+    assert list(kept["service_date"].dt.strftime("%Y-%m-%d")) == ["2020-03-15", "2022-04-01"]

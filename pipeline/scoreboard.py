@@ -10,6 +10,7 @@ Usage:
     python -m pipeline.scoreboard --split validation --sweep   # tune k / half-life
     python -m pipeline.scoreboard --split test --horizon t15   # baselines + GBM at T-15 min
     python -m pipeline.scoreboard --horizon t15 --folds monthly # rolling-origin, Jan 2024 - Oct 2026
+    python -m pipeline.scoreboard --horizon day --folds monthly --folds-start 2020-01 --exclude-covid
 
 Every run also reports, against --reference (default hier_tuned):
   - a day-block bootstrap (2,000 resamples of days) of each loss difference, 95% interval
@@ -231,11 +232,19 @@ def is_peak(t: pd.DataFrame) -> np.ndarray:
     return ((t["daytype"] == "wkd") & t["dep_hour"].between(6, 9)).values
 
 
-def score(predictors, split: str, horizon: str = "day", check: bool = True):
+def drop_covid(targets: pd.DataFrame) -> pd.DataFrame:
+    """Scoring filter only: COVID days stay in the history predictors learn from."""
+    from .external import COVID_END, COVID_START
+    return targets[~targets["service_date"].between(COVID_START, COVID_END)]
+
+
+def score(predictors, split: str, horizon: str = "day", check: bool = True, exclude_covid: bool = False):
     trips = load_trips(horizon)
     start, end = map(pd.Timestamp, SPLITS[split])
     history = trips[trips["service_date"] <= end]          # predictors only look back
     targets = trips[(trips["service_date"] >= start) & (trips["service_date"] <= end)]
+    if exclude_covid:
+        targets = drop_covid(targets)
 
     rows, per_corridor, preds = [], {}, {}
     for pr in predictors:
@@ -294,7 +303,8 @@ def append_log(rows: pd.DataFrame) -> None:
     rows.to_csv(LOG, mode="a", header=not LOG.exists(), index=False, float_format="%.5f")
 
 
-def monthly_folds(make_predictors, horizon: str, start: str = FOLDS_START, end: str = FOLDS_END):
+def monthly_folds(make_predictors, horizon: str, start: str = FOLDS_START, end: str = FOLDS_END,
+                  exclude_covid: bool = False):
     """Rolling origin: each month is scored by predictors trained on everything before it."""
     trips = load_trips(horizon)
     rows = []
@@ -302,6 +312,8 @@ def monthly_folds(make_predictors, horizon: str, start: str = FOLDS_START, end: 
         m0, m1 = month.start_time, month.end_time.normalize()
         history = trips[trips["service_date"] <= m1]
         targets = trips[(trips["service_date"] >= m0) & (trips["service_date"] <= m1)]
+        if exclude_covid:
+            targets = drop_covid(targets)
         if targets.empty:
             continue
         for pr in make_predictors(str(m0.date())):
@@ -339,6 +351,8 @@ def main(argv=None):
     ap.add_argument("--no-check", action="store_true", help="skip the leakage check")
     ap.add_argument("--reference", default="hier_tuned", help="model the bootstrap compares against")
     ap.add_argument("--folds", choices=["monthly"], help="rolling-origin evaluation instead of a split")
+    ap.add_argument("--folds-start", default=FOLDS_START, help="first fold month, YYYY-MM")
+    ap.add_argument("--exclude-covid", action="store_true", help="do not score COVID-period days")
     args = ap.parse_args(argv)
     out = config.DATA / "reports"
     out.mkdir(parents=True, exist_ok=True)
@@ -346,11 +360,14 @@ def main(argv=None):
     horizon = HORIZON_LABEL[args.horizon]
 
     if args.folds:
-        print(f"monthly folds {FOLDS_START} to {FOLDS_END}, horizon {horizon}")
-        df, summary, worst = monthly_folds(lambda end: make_predictors(args.horizon, end), args.horizon)
+        print(f"monthly folds {args.folds_start} to {FOLDS_END}, horizon {horizon}"
+              + (", COVID days excluded" if args.exclude_covid else ""))
+        df, summary, worst = monthly_folds(lambda end: make_predictors(args.horizon, end), args.horizon,
+                                           start=args.folds_start, exclude_covid=args.exclude_covid)
         path = out / f"scoreboard_folds_{args.horizon}.md"
         path.write_text("\n\n".join([
-            f"# Rolling-origin folds {FOLDS_START} to {FOLDS_END}: {horizon}",
+            f"# Rolling-origin folds {args.folds_start} to {FOLDS_END}: {horizon}"
+            + (" (COVID days excluded)" if args.exclude_covid else ""),
             "Each month scored by predictors trained on everything before it. median / max over months.",
             "## Summary", fmt(summary), "## Worst month (pinball)", fmt(worst),
             "## Per month", fmt(df.set_index(["month", "model"]))]) + "\n")
@@ -367,7 +384,7 @@ def main(argv=None):
 
     print(f"split {args.split} {SPLITS[args.split]}, horizon {horizon}")
     table, per_corridor, preds, targets = score(predictors, args.split, args.horizon,
-                                                check=not args.no_check)
+                                                check=not args.no_check, exclude_covid=args.exclude_covid)
     table = table.sort_values("pinball").reset_index(drop=True)
     best = table.loc[0, "model"]
     ref = args.reference if args.reference in preds else best

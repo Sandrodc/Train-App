@@ -9,11 +9,11 @@ Working title: **Flighty for Dutch public transport** — a commute confidence l
 
 ## Data pipeline
 
-Python 3.9+, everything runs locally on DuckDB + Parquet. `data/` is git-ignored (~2.3 GB once built).
+Python 3.9+, everything runs locally on DuckDB + Parquet. `data/` is git-ignored (~4.5 GB once built).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pipeline.download      # RdT stations, disruptions 2011-2025, services 2023-01..2026-10 (~1.4 GB)
+.venv/bin/python -m pipeline.download      # RdT stations, disruptions 2011-2025, services 2019-01..2026-10 (~2.9 GB; 2019-2022 are yearly files)
 .venv/bin/python -m pipeline.build_db      # clean layer: data/clean/*.parquet + data/train.duckdb views
 .venv/bin/python -m pipeline.labels        # corridor-trip labels (domestic trains, variants collapsed)
 .venv/bin/python -m pipeline.external      # holiday calendar (+ old daily weather, kept for comparison)

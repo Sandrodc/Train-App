@@ -9,6 +9,8 @@ Writes:
 Usage:
     python -m pipeline.build_db
 """
+import gzip
+import shutil
 import sys
 
 import duckdb
@@ -41,23 +43,8 @@ SERVICES_COLUMNS = {
 }
 
 
-def build_stops(con: duckdb.DuckDBPyConnection) -> None:
-    files = sorted((config.RAW / "services").glob("services-*.csv.gz"))
-    if not files:
-        raise SystemExit("No services files in data/raw/services. Run pipeline.download first.")
-    out = config.CLEAN / "stops"
-    out.mkdir(parents=True, exist_ok=True)
-    cols = ", ".join(f"'{k}': '{v}'" for k, v in SERVICES_COLUMNS.items())
-
-    for f in files:
-        ym = f.name.removeprefix("services-").removesuffix(".csv.gz")
-        part = out / f"month={ym}"
-        if part.exists():
-            print(f"  skip  {ym}")
-            continue
-        part.mkdir()
-        con.execute(f"""
-            COPY (
+def stops_select(f, cols: str) -> str:
+    return f"""
               WITH s AS (
                 SELECT * FROM read_csv('{f}', header=true, columns={{{cols}}})
               )
@@ -84,10 +71,60 @@ def build_stops(con: duckdb.DuckDBPyConnection) -> None:
                 "Stop:Platform change"         AS platform_changed,
                 "Stop:Planned platform"        AS planned_platform,
                 "Stop:Actual platform"         AS actual_platform
-              FROM s
-            ) TO '{part}/stops.parquet' (FORMAT parquet, COMPRESSION zstd)
-        """)
-        print(f"  built {ym}")
+              FROM s"""
+
+
+def check_header(f) -> None:
+    """Stop if a file's columns differ from SERVICES_COLUMNS (older years could differ)."""
+    with gzip.open(f, "rt") as fh:
+        header = fh.readline().strip().split(",")
+    if header != list(SERVICES_COLUMNS):
+        raise SystemExit(f"{f.name}: columns differ from the expected schema:\n  got  {header}\n"
+                         f"  want {list(SERVICES_COLUMNS)}")
+
+
+def build_stops(con: duckdb.DuckDBPyConnection) -> None:
+    """One parquet per month. Monthly files map 1:1; yearly files (2019-2022) are split."""
+    files = sorted((config.RAW / "services").glob("services-*.csv.gz"))
+    if not files:
+        raise SystemExit("No services files in data/raw/services. Run pipeline.download first.")
+    out = config.CLEAN / "stops"
+    out.mkdir(parents=True, exist_ok=True)
+    cols = ", ".join(f"'{k}': '{v}'" for k, v in SERVICES_COLUMNS.items())
+    for f in files:
+        check_header(f)
+
+    for f in files:
+        period = f.name.removeprefix("services-").removesuffix(".csv.gz")
+        if len(period) == 4:                                  # yearly file
+            wanted = [f"month={period}-{m:02d}" for m in range(1, 13)]
+            if all((out / w).exists() for w in wanted):
+                print(f"  skip  {period}")
+                continue
+            tmp = out / f".year-{period}"
+            shutil.rmtree(tmp, ignore_errors=True)
+            con.execute(f"""
+                COPY (SELECT *, strftime(service_date, '%Y-%m') AS month FROM ({stops_select(f, cols)}))
+                TO '{tmp}' (FORMAT parquet, COMPRESSION zstd, PARTITION_BY (month))
+            """)
+            for part in sorted(tmp.glob("month=*")):
+                target = out / part.name
+                if target.exists():
+                    print(f"  skip  {part.name.removeprefix('month=')} (exists)")
+                    continue
+                target.mkdir()
+                for i, pq_file in enumerate(sorted(part.glob("*.parquet"))):
+                    pq_file.rename(target / ("stops.parquet" if i == 0 else f"stops-{i}.parquet"))
+                print(f"  built {part.name.removeprefix('month=')} (from {f.name})")
+            shutil.rmtree(tmp, ignore_errors=True)
+            continue
+        part = out / f"month={period}"
+        if part.exists():
+            print(f"  skip  {period}")
+            continue
+        part.mkdir()
+        con.execute(f"COPY ({stops_select(f, cols)}) TO '{part}/stops.parquet' (FORMAT parquet, COMPRESSION zstd)")
+        print(f"  built {period}")
 
 
 def build_small_tables(con: duckdb.DuckDBPyConnection) -> None:

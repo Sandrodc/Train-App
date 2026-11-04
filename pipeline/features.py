@@ -40,6 +40,7 @@ DAY_FEATURES = [
     "prev_day_cancel_share", "prev_day_mean_delay",
     "sched_ratio",
     "public_holiday", "school_holiday_regions", "days_since_dst", "leaves_season", "month",
+    "covid_period",
 ]
 # Old daily weather (observed, same day: a "perfect forecast" that wasn't knowable day-ahead).
 # Kept in the feature files for comparison only.

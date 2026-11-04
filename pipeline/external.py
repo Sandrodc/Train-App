@@ -30,6 +30,10 @@ STATIONS = {260: "de_bilt", 344: "rotterdam", 240: "schiphol", 370: "eindhoven"}
 VARS = "FHX:FXX:TN:TX:RH:DR"
 SCHOOL_API = "https://opendata.rijksoverheid.nl/v1/infotypes/schoolholidays?output=json"
 SCHOOL_KNOWN_FROM = "2024-09-02"   # summer 2024 belongs to the uncovered 2023-24 school year
+# COVID-19: first lockdown (16 Mar 2020) until the last measures were dropped (end Mar 2022).
+# A feature for the models, and a filter the scoreboard can apply (--exclude-covid).
+COVID_START, COVID_END = "2020-03-16", "2022-03-31"
+CALENDAR_START = "2018-12-01"      # services start 2019-01; one month of warm-up
 
 
 def fetch_weather(start: str, end: str) -> pd.DataFrame:
@@ -91,11 +95,12 @@ def build_calendar(start: str, end: str) -> pd.DataFrame:
     # Leaves on the line season (autumn adhesion problems).
     doy = cal["date"].dt.dayofyear
     cal["leaves_season"] = ((doy >= 274) & (doy <= 349)).astype(int)   # ~1 Oct - 15 Dec
+    cal["covid_period"] = cal["date"].between(COVID_START, COVID_END).astype(int)
     return cal
 
 
 def main(argv=None):
-    start, end = "2022-12-01", "2026-10-31"
+    start, end = CALENDAR_START, "2026-10-31"
     config.CLEAN.mkdir(parents=True, exist_ok=True)
     wx = fetch_weather(start, end)
     wx.to_parquet(config.CLEAN / "weather_daily.parquet", index=False)
@@ -104,7 +109,8 @@ def main(argv=None):
     cal = build_calendar(start, end)
     cal.to_parquet(config.CLEAN / "calendar.parquet", index=False)
     print(f"calendar: {len(cal)} days, {int(cal['public_holiday'].sum())} public holidays, "
-          f"school holiday days known from {SCHOOL_KNOWN_FROM}")
+          f"school holiday days known from {SCHOOL_KNOWN_FROM}, "
+          f"{int(cal['covid_period'].sum())} COVID-period days")
 
 
 if __name__ == "__main__":

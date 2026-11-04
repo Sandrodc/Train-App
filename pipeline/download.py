@@ -63,7 +63,15 @@ def main(argv=None):
 
     if not args.skip_services:
         print("services")
+        years_done = set()
         for ym in months(args.first, args.last):
+            year = int(ym[:4])
+            if year < config.SERVICES_MONTHLY_FROM:     # yearly file only; build_db splits it
+                if year not in years_done:
+                    fetch(config.SERVICES_YEAR_URL.format(year=year),
+                          config.RAW / "services" / f"services-{year}.csv.gz")
+                    years_done.add(year)
+                continue
             fetch(config.SERVICES_URL.format(ym=ym),
                   config.RAW / "services" / f"services-{ym}.csv.gz")
 
