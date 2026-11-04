@@ -85,17 +85,54 @@ def check(live=LIVE, now=None) -> list[str]:
     return problems
 
 
-def main(argv=None):
-    problems = check()
-    if not problems:
-        print("ok")
-        return 0
-    msg = "train-logger health: " + "; ".join(problems)
-    print(msg)
+STATE = LIVE / ".health_state.json"
+REMIND_HOURS = 6
+
+
+def notify(msg: str) -> None:
     cmd = os.environ.get("HEALTH_NOTIFY_CMD")
     if cmd:
         subprocess.run(cmd, shell=True, input=msg, text=True, timeout=30)
-    return 1
+
+
+def decide(problems: list, state: dict, now: datetime) -> tuple[str | None, dict]:
+    """What to send, given the last state: one alert when it breaks, a reminder every
+    REMIND_HOURS while it stays broken, one notice when it recovers. Never every run."""
+    was_bad, last = state.get("bad", False), state.get("last_alert")
+    if problems:
+        due = not was_bad or last is None or \
+            now - datetime.fromisoformat(last) >= timedelta(hours=REMIND_HOURS)
+        msg = ("train-logger PROBLEM: " if not was_bad else "train-logger STILL BROKEN: ") + "; ".join(problems)
+        return (msg if due else None), {"bad": True, "last_alert": now.isoformat() if due else last}
+    if was_bad:
+        return "train-logger recovered: all checks pass again", {"bad": False, "last_alert": None}
+    return None, {"bad": False, "last_alert": None}
+
+
+def main(argv=None):
+    import json
+    if argv is None:
+        argv = sys.argv[1:]
+    if "--test" in argv:
+        notify("train-logger health: test alert. If you got this, alerts work.")
+        print("test alert sent")
+        return 0
+    now = datetime.now(timezone.utc)
+    problems = check(now=now)
+    print("ok" if not problems else "problems: " + "; ".join(problems))
+    try:
+        state = json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        state = {}
+    msg, state = decide(problems, state, now)
+    if msg:
+        notify(msg)
+        print("notified:", msg)
+    try:
+        STATE.write_text(json.dumps(state))
+    except OSError:
+        pass
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":

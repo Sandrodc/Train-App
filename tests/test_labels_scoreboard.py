@@ -79,3 +79,19 @@ def test_first_cancel_recall():
     r = scoreboard.first_cancel_recall(y, p)
     assert r["first_cancels"] == 1 and r["first_recall"] == 0.0
     assert r["later_cancels"] == 2 and r["later_recall"] == 1.0
+
+
+def test_health_alerts_once_reminds_and_recovers():
+    from datetime import datetime, timedelta, timezone
+    from pipeline.health import decide
+    t0 = datetime(2026, 11, 4, 12, tzinfo=timezone.utc)
+    msg, s = decide(["stale"], {}, t0)
+    assert msg.startswith("train-logger PROBLEM")
+    msg, s = decide(["stale"], s, t0 + timedelta(minutes=5))
+    assert msg is None
+    msg, s = decide(["stale"], s, t0 + timedelta(hours=6))
+    assert msg.startswith("train-logger STILL BROKEN")
+    msg, s = decide([], s, t0 + timedelta(hours=7))
+    assert "recovered" in msg
+    msg, s = decide([], s, t0 + timedelta(hours=8))
+    assert msg is None
