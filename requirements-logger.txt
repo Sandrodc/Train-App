@@ -1,0 +1,4 @@
+# Minimal dependencies for the live logger on the server (pipeline/live.py).
+pyzmq>=25
+pyarrow>=15
+duckdb>=1.1

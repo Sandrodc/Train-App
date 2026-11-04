@@ -1,0 +1,26 @@
+# systemd unit for the NS live logger on a small Linux server (e.g. a 2 GB VPS).
+#   sudo cp deploy/train-logger.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now train-logger
+#   journalctl -u train-logger -f
+[Unit]
+Description=NS InfoPlus live logger (NDOV Loket)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=train
+WorkingDirectory=/opt/train-app
+ExecStart=/opt/train-app/.venv/bin/python -m pipeline.live run
+Restart=always
+RestartSec=30
+# SIGTERM makes the logger flush its buffer before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+# The logger only needs to write its own data folder.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
