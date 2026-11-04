@@ -1,6 +1,6 @@
 # Runs the logger health check once (triggered by train-health.timer every 5 min).
-# Alert channel: set HEALTH_NOTIFY_CMD in /etc/default/train-health, e.g.
-#   HEALTH_NOTIFY_CMD=curl -s -d @- https://ntfy.sh/<your-private-topic>
+# Alert channel: HEALTH_NOTIFY_CMD in /etc/default/train-health (live server: ntfy push), e.g.
+#   HEALTH_NOTIFY_CMD=curl -fsS -o /dev/null -H "Title: Train logger" -d @- https://ntfy.sh/<private-topic>
 [Unit]
 Description=Health check for the NS live logger
 
